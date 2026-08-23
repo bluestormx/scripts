@@ -16,13 +16,20 @@ Das Skript arbeitet in zwei Stufen:
 
   Beispiel: `office_notepads_4k.zip` → Ordner `Office Notepads`
 
-- **Stufe 2** – Verschiebt jede ZIP-Datei zusammen mit dem passenden Bild
-  (`.jpg`, `.jpeg`, `.png`, `.bmp`, `.gif`, `.webp`, `.tiff`) in den in Stufe 1
-  erstellten Ordner. Das Bild wird zuerst mit identischem Dateinamen gesucht;
-  falls keins gefunden wird, zusätzlich ohne den `4k`/`8k`-Zusatz.
+- **Stufe 2** – Verschiebt die ZIP-Datei zusammen mit **allen Begleitdateien**,
+  die denselben Namen bzw. Namens-Anfang tragen, in den in Stufe 1 erstellten
+  Ordner. Die Dateiendung spielt dabei keine Rolle (`.png`, `.jpg`, `.fbx`,
+  `.blend`, `.psd`, usw.) – es werden also nicht nur zwei, sondern beliebig
+  viele zusammengehörige Dateien pro Satz erkannt und verschoben. Auch mehrere
+  ZIP-Varianten (z.B. `4k`- und `8k`-Version) desselben Satzes werden erkannt.
 
-  Beispiel: `office_notepads_4k.zip` + `office_notepads.png` → beide landen in
-  `Office Notepads`
+  Beispiel:
+  ```
+  table_1-vxd-4K.zip
+  table_1-vxd.fbx
+  table_1-vxd.blend
+  ```
+  → alle drei Dateien landen im Ordner `Table 1 Vxd`
 
 Beide Stufen unterstützen `-DryRun`, um vorab zu prüfen, was passieren würde,
 ohne dass etwas angelegt oder verschoben wird.
@@ -64,10 +71,14 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 
 ## Hinweise
 
-- Fehlt zu einer ZIP-Datei ein passendes Bild oder der zugehörige Ordner
-  (Stufe 1 noch nicht ausgeführt), wird der Satz übersprungen und im
-  Konsolen-Log entsprechend markiert.
+- Fehlt zu einem Satz der zugehörige Ordner (Stufe 1 noch nicht ausgeführt),
+  wird der komplette Satz übersprungen und im Konsolen-Log entsprechend
+  markiert.
+- Werden zu einem Namens-Anfang keine weiteren Dateien gefunden, wird das
+  ebenfalls im Log vermerkt.
 - Bereits existierende Ordner werden in Stufe 1 nicht erneut angelegt.
+- Stage 2 arbeitet ausschließlich mit Dateien im selben Ordner wie das Skript
+  (keine Unterordner werden durchsucht).
 
 ---
 
