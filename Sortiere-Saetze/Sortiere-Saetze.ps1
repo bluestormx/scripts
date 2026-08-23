@@ -9,9 +9,10 @@
              - Die Zusaetze "4k" / "8k" werden entfernt
              - Jedes Wort wird gross geschrieben (Titel-Schreibweise)
 
-    Stufe 2: Verschiebt jede ZIP-Datei zusammen mit dem dazugehoerigen Bild
-             (gleicher Dateiname, andere Endung) in den in Stufe 1 erstellten
-             Ordner.
+    Stufe 2: Verschiebt jede ZIP-Datei zusammen mit allen Begleitdateien, die
+             denselben Namen bzw. Namens-Anfang tragen (z.B. .png, .fbx,
+             .blend, ...), in den in Stufe 1 erstellten Ordner. Die Endung
+             spielt dabei keine Rolle.
 
     Beide Stufen unterstuetzen -DryRun, um vorher zu pruefen, was passieren wuerde,
     ohne dass etwas angelegt oder verschoben wird.
@@ -42,9 +43,6 @@ param(
 # Ordner, in dem das Skript selbst liegt
 $RootPath = $PSScriptRoot
 
-# Erlaubte Bild-Endungen, die zu einer ZIP-Datei gehoeren koennen
-$ImageExtensions = @('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff')
-
 function Get-CleanFolderName {
     param([string]$BaseName)
 
@@ -53,9 +51,10 @@ function Get-CleanFolderName {
     # Unterstriche durch Leerzeichen ersetzen
     $name = $name -replace '_', ' '
 
-    # 4k / 8k Zusaetze entfernen (als eigenes "Wort", Gross-/Kleinschreibung egal)
-    $name = $name -replace '(?i)\b4k\b', ''
-    $name = $name -replace '(?i)\b8k\b', ''
+    # 4k / 8k Zusaetze inkl. davorstehendem Trenner (Leerzeichen/Bindestrich)
+    # entfernen, damit keine Reste wie "Table 5-" uebrig bleiben
+    $name = $name -replace '(?i)[\s-]*\b4k\b', ''
+    $name = $name -replace '(?i)[\s-]*\b8k\b', ''
 
     # Mehrfache Leerzeichen zusammenfassen und trimmen
     $name = $name -replace '\s+', ' '
@@ -76,10 +75,32 @@ function Get-ImageMatchBaseName {
     param([string]$BaseName)
 
     # Entfernt einen abschliessenden 4k/8k-Zusatz (mit optionalem Trenner davor),
-    # da die Bilder diesen Zusatz oft nicht im Dateinamen haben.
+    # da Begleitdateien (Bilder, .fbx, .blend, ...) diesen Zusatz oft nicht
+    # im Dateinamen haben.
     # Beispiel: "office_notepads_4k" -> "office_notepads"
     $name = $BaseName -replace '(?i)[_\s-]*(4k|8k)\s*$', ''
     return $name.Trim()
+}
+
+function Test-BelongsToGroup {
+    param(
+        [string]$FileBaseName,
+        [string]$GroupKey
+    )
+
+    # 1) Exakte Uebereinstimmung mit dem Gruppen-Schluessel
+    if ($FileBaseName -eq $GroupKey) { return $true }
+
+    # 2) Uebereinstimmung nach Entfernen eines eigenen 4k/8k-Zusatzes
+    #    (z.B. weitere ZIP-Variante "table_1-vxd-8K")
+    $stripped = Get-ImageMatchBaseName -BaseName $FileBaseName
+    if ($stripped -eq $GroupKey) { return $true }
+
+    # 3) Praefix-Uebereinstimmung mit klarer Trennung danach
+    #    (z.B. "table_1-vxd_preview" gehoert zu "table_1-vxd")
+    if ($stripped -match "^$([regex]::Escape($GroupKey))[_\-\s.]") { return $true }
+
+    return $false
 }
 
 # ---------------------------------------------------------------------------
@@ -116,7 +137,8 @@ function Invoke-Stage1 {
 }
 
 # ---------------------------------------------------------------------------
-# STUFE 2: ZIP + Bild in den passenden Ordner verschieben
+# STUFE 2: ZIP + alle zugehoerigen Begleitdateien in den passenden Ordner
+#          verschieben (endungsunabhaengig)
 # ---------------------------------------------------------------------------
 function Invoke-Stage2 {
     $zipFiles = Get-ZipFiles
@@ -128,42 +150,41 @@ function Invoke-Stage2 {
 
     Write-Host "=== STUFE 2: Dateien verschieben ($(if($DryRun){'DRYRUN'}else{'AUSFUEHRUNG'})) ===" -ForegroundColor Cyan
 
-    foreach ($zip in $zipFiles) {
-        $baseName   = $zip.BaseName
-        $folderName = Get-CleanFolderName -BaseName $baseName
+    # Gruppen-Schluessel je Satz ermitteln (4k/8k entfernt), Duplikate vermeiden
+    # z.B. "table_1-vxd-4K.zip" und "table_1-vxd-8K.zip" -> beide "table_1-vxd"
+    $groupKeys = $zipFiles |
+        ForEach-Object { Get-ImageMatchBaseName -BaseName $_.BaseName } |
+        Select-Object -Unique
+
+    foreach ($groupKey in $groupKeys) {
+        $folderName = Get-CleanFolderName -BaseName $groupKey
         $targetPath = Join-Path -Path $RootPath -ChildPath $folderName
-
-        # Passendes Bild suchen. Erst mit identischem Basisnamen versuchen,
-        # falls nichts gefunden wird, ohne 4k/8k-Zusatz erneut versuchen
-        # (z.B. "office_notepads_4k.zip" -> "office_notepads.png").
-        $imageMatchBase = Get-ImageMatchBaseName -BaseName $baseName
-
-        $image = Get-ChildItem -LiteralPath $RootPath -File |
-            Where-Object {
-                $ImageExtensions -contains $_.Extension.ToLower() -and
-                ($_.BaseName -eq $baseName -or $_.BaseName -eq $imageMatchBase)
-            } | Select-Object -First 1
-
-        if (-not $image) {
-            Write-Host "  [KEIN BILD GEFUNDEN] fuer '$($zip.Name)' (gesucht: '$baseName' / '$imageMatchBase') -> uebersprungen" -ForegroundColor Yellow
-            continue
-        }
 
         if (-not (Test-Path -LiteralPath $targetPath)) {
             Write-Host "  [ORDNER FEHLT] '$folderName' existiert nicht (erst Stufe 1 ausfuehren) -> uebersprungen" -ForegroundColor Yellow
             continue
         }
 
-        $zipTarget   = Join-Path -Path $targetPath -ChildPath $zip.Name
-        $imageTarget = Join-Path -Path $targetPath -ChildPath $image.Name
+        # Alle Dateien im Root-Ordner finden, die zu diesem Satz gehoeren -
+        # unabhaengig von der Dateiendung (.zip, .png, .fbx, .blend, ...)
+        $groupFiles = Get-ChildItem -LiteralPath $RootPath -File |
+            Where-Object { Test-BelongsToGroup -FileBaseName $_.BaseName -GroupKey $groupKey }
 
-        if ($DryRun) {
-            Write-Host "  [WUERDE VERSCHIEBEN] '$($zip.Name)' + '$($image.Name)' -> '$folderName'" -ForegroundColor Gray
+        if (-not $groupFiles) {
+            Write-Host "  [KEINE DATEIEN GEFUNDEN] fuer Satz '$groupKey' -> uebersprungen" -ForegroundColor Yellow
+            continue
         }
-        else {
-            Move-Item -LiteralPath $zip.FullName -Destination $zipTarget -Force
-            Move-Item -LiteralPath $image.FullName -Destination $imageTarget -Force
-            Write-Host "  [VERSCHOBEN] '$($zip.Name)' + '$($image.Name)' -> '$folderName'" -ForegroundColor Green
+
+        foreach ($file in $groupFiles) {
+            $target = Join-Path -Path $targetPath -ChildPath $file.Name
+
+            if ($DryRun) {
+                Write-Host "  [WUERDE VERSCHIEBEN] '$($file.Name)' -> '$folderName'" -ForegroundColor Gray
+            }
+            else {
+                Move-Item -LiteralPath $file.FullName -Destination $target -Force
+                Write-Host "  [VERSCHOBEN] '$($file.Name)' -> '$folderName'" -ForegroundColor Green
+            }
         }
     }
 }
